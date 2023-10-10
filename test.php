@@ -1,9 +1,11 @@
 <?php
-$counter = new WebServer();
-$counter->start("127.0.0.1","8989",function(){
-        sleep(5);
-       return "HTTP/1.1 200 OK\r\n".
-              "Content-Type: text/html\r\n".
-              "\r\n" .
-              "<h1>my first webserver</h1>";
+$server = new WebServer("127.0.0.1","8888");
+$server->on("request",function(){
+       $text = "66666";
+       ob_start();
+       include "./test.html";
+       $contents=ob_get_contents();
+       ob_end_clean();
+       return $contents;
 });
+$server->start();

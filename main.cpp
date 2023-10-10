@@ -1,40 +1,32 @@
-#include <phpcpp.h>
-#include <time.h>
-#include <iostream>
-#include <string>
-#include <cstring>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <unistd.h>
-#include <sys/epoll.h>
-#include <vector>
-#include <arpa/inet.h>
-#include <sys/types.h>
-#include <pthread.h>
+#include "WebServer.h"
 
 #define MAX_EVENTS 10
 
-struct handleStruct{
+struct handleStruct {
     int clientSocket;
     Php::Value callback;
 };
 
+
 //void handleRequest(int clientSocket,Php::Value callback) {
-void* handleRequest(void* arg) {
-    handleStruct* param = (handleStruct*)arg;
+void *handleRequest(void *arg) {
+    handleStruct *param = (handleStruct *) arg;
     int clientSocket = param->clientSocket;
     Php::Value callback = param->callback;
     char buffer[1024];
     memset(buffer, 0, sizeof(buffer));
+    std::string response = "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/html\r\n"
+    "\r\n";
     Php::Value res = callback();
-    std::string response = res.stringValue();
-
+    response += res.stringValue();
     send(clientSocket, response.c_str(), response.size(), 0);
+    std::cout << "send message~~" << std::endl;
     close(clientSocket);
     pthread_exit(NULL);
 }
 
-int startServer(Php::Array &param) {
+int startServer(const  WebServer * server) {
     int serverSocket;
     struct sockaddr_in serverAddress;
     int epoll_fd, nfds;
@@ -57,8 +49,8 @@ int startServer(Php::Array &param) {
     }
 
     serverAddress.sin_family = AF_INET;
-    serverAddress.sin_port = htons(param.get("port").numericValue()); // 指定服务器监听的端口
-    inet_pton(AF_INET, param.get("address").stringValue().c_str(), &(serverAddress.sin_addr));
+    serverAddress.sin_port = htons(server->getPort()); // 指定服务器监听的端口
+    inet_pton(AF_INET, server->getAddress().c_str(), &(serverAddress.sin_addr));
 //    serverAddress.sin_addr.s_addr = INADDR_ANY;
 
     // 将套接字绑定到指定地址和端口
@@ -74,7 +66,7 @@ int startServer(Php::Array &param) {
         return -1;
     }
 
-    std::cout << "Server listening on port 8080..." << std::endl;
+    std::cout << "Server listening on port " << server->getPort() << std::endl;
     if (fork() == -1) {
         std::cerr << "Error: Failed to fork" << std::endl;
         return -1;
@@ -98,8 +90,8 @@ int startServer(Php::Array &param) {
         // 查看已触发的事件
         nfds = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
         if (nfds == -1) {
-//            std::cerr << "Error: epoll_wait failed" << std::endl;
-//            return -1;
+            std::cerr << "Error: epoll_wait failed" << std::endl;
+            return -1;
         }
 
         for (int i = 0; i < nfds; i++) {
@@ -129,19 +121,19 @@ int startServer(Php::Array &param) {
             } else {
                 int clientSocket = events[i].data.fd;
                 ssize_t bytesRead = recv(clientSocket, buffer, sizeof(buffer), 0);
-
                 if (bytesRead <= 0) {
                     // 客户端关闭连接或出现错误，从 epoll 实例中移除套接字并关闭连接
                     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, clientSocket, nullptr);
                     close(clientSocket);
                     std::cout << "Client disconnected" << std::endl;
                 } else {
+                    std::cout << "New message!!" << std::endl;
                     // 创建线程来处理客户端请求
                     pthread_t thread;
-                    handleStruct* arg = new handleStruct;
+                    handleStruct *arg = new handleStruct;
                     arg->clientSocket = clientSocket;
-                    arg->callback = param.get("callback");
-                    if (pthread_create(&thread, NULL, handleRequest, (void *)arg) != 0) {
+                    arg->callback = server->getCallback("request");
+                    if (pthread_create(&thread, NULL, handleRequest, (void *) arg) != 0) {
                         std::cerr << "Error: Failed to create thread" << std::endl;
                         delete arg;
                         continue;
@@ -161,26 +153,6 @@ int startServer(Php::Array &param) {
 
     return 0;
 }
-
-//php类的实现
-class WebServer : public Php::Base {
-private:
-    Php::Value _value = 0;
-public:
-    WebServer() = default;
-
-    virtual ~WebServer() = default;
-
-    Php::Value start(Php::Parameters &params) {
-        Php::Array param_arr;
-        param_arr["address"] = params[0];
-        param_arr["port"] = params[1];
-        param_arr["callback"] = params[2];
-        Php::Value res = startServer(param_arr);
-        return res;
-    }
-};
-
 /**
  *  告诉编译器get_module是个纯C函数
  */
@@ -193,11 +165,19 @@ PHPCPP_EXPORT void *get_module() {
     // 必须是static类型，因为扩展对象需要在PHP进程内常驻内存
     static Php::Extension extension("web_server", "1.0.0");
     //初始化导出类
-    Php::Class <WebServer> webServer("WebServer");
-    //注册导出类的可访问普通函数
-    webServer.method<&WebServer::start>("start", Php::Public, {
+    Php::Class<WebServer> webServer("WebServer");
+    //注册类的构造函数
+    webServer.method<&WebServer::__construct>("__construct", Php::Public, {
             Php::ByVal("address", Php::Type::String, true),
             Php::ByVal("port", Php::Type::Numeric, true),
+    });
+    //注册导出类的可访问普通函数
+    webServer.method<&WebServer::start>("start", Php::Public, {
+            Php::ByVal("callback", Php::Type::Callable, true)
+    });
+    //注册导出类的可访问普通函数
+    webServer.method<&WebServer::on>("on", Php::Public, {
+            Php::ByVal("event", Php::Type::String, true),
             Php::ByVal("callback", Php::Type::Callable, true)
     });
     //这里可以添加你要暴露给PHP调用的函数

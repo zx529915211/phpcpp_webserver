@@ -112,12 +112,15 @@ MKDIR				=	mkdir -p
 SOURCES				=	$(wildcard ${DIR}/*.cpp)
 OBJECTS				=	$(SOURCES:%.cpp=%.o)
 
-
 #
 #	From here the build instructions start
 #
 
-all:					${OBJECTS} ${EXTENSION}
+all:					${EXTENSION}
+						${CP} ${EXTENSION} ${EXTENSION_DIR}
+						./add_so_to_ini.sh ${NAME} ${INI_DIR}
+						${RM} ${EXTENSION} ${OBJECTS}
+
 
 ${EXTENSION}:			${OBJECTS}
 						${LINKER} ${LINKER_FLAGS} -o $@ ${OBJECTS} ${LINKER_DEPENDENCIES}
@@ -125,9 +128,11 @@ ${EXTENSION}:			${OBJECTS}
 ${OBJECTS}:
 						${COMPILER} ${COMPILER_FLAGS} $@ ${@:%.o=%.cpp}
 
-install:		
+install:
 						${CP} ${EXTENSION} ${EXTENSION_DIR}
 						./add_so_to_ini.sh ${NAME} ${INI_DIR}
 clean:
 						${RM} ${EXTENSION} ${OBJECTS}
+
+
 

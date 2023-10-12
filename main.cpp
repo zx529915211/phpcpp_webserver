@@ -8,7 +8,6 @@ struct handleStruct {
 };
 
 
-//void handleRequest(int clientSocket,Php::Value callback) {
 void *handleRequest(void *arg) {
     handleStruct *param = (handleStruct *) arg;
     int clientSocket = param->clientSocket;
@@ -26,7 +25,21 @@ void *handleRequest(void *arg) {
     pthread_exit(NULL);
 }
 
-int startServer(const  WebServer * server) {
+void *handleRequestForCpp(int clientSocket,Php::Value callback) {
+    char buffer[1024];
+    memset(buffer, 0, sizeof(buffer));
+    std::string response = "HTTP/1.1 200 OK\r\n"
+                           "Content-Type: text/html\r\n"
+                           "\r\n";
+    Php::Value res = callback();
+    response += res.stringValue();
+    send(clientSocket, response.c_str(), response.size(), 0);
+    std::cout << "send message~~" << std::endl;
+    close(clientSocket);
+    pthread_exit(NULL);
+}
+
+int startServer(const WebServer& server) {
     int serverSocket;
     struct sockaddr_in serverAddress;
     int epoll_fd, nfds;
@@ -49,8 +62,8 @@ int startServer(const  WebServer * server) {
     }
 
     serverAddress.sin_family = AF_INET;
-    serverAddress.sin_port = htons(server->getPort()); // 指定服务器监听的端口
-    inet_pton(AF_INET, server->getAddress().c_str(), &(serverAddress.sin_addr));
+    serverAddress.sin_port = htons(server.getPort()); // 指定服务器监听的端口
+    inet_pton(AF_INET, server.getAddress().c_str(), &(serverAddress.sin_addr));
 //    serverAddress.sin_addr.s_addr = INADDR_ANY;
 
     // 将套接字绑定到指定地址和端口
@@ -66,7 +79,7 @@ int startServer(const  WebServer * server) {
         return -1;
     }
 
-    std::cout << "Server listening on port " << server->getPort() << std::endl;
+    std::cout << "Server listening on port " << server.getPort() << std::endl;
     if (fork() == -1) {
         std::cerr << "Error: Failed to fork" << std::endl;
         return -1;
@@ -129,19 +142,39 @@ int startServer(const  WebServer * server) {
                 } else {
                     std::cout << "New message!!" << std::endl;
                     // 创建线程来处理客户端请求
-                    pthread_t thread;
-                    handleStruct *arg = new handleStruct;
-                    arg->clientSocket = clientSocket;
-                    arg->callback = server->getCallback("request");
-                    if (pthread_create(&thread, NULL, handleRequest, (void *) arg) != 0) {
-                        std::cerr << "Error: Failed to create thread" << std::endl;
-                        delete arg;
-                        continue;
-                    }
-                    // 分离线程，使其在完成处理后能自动释放资源
-                    pthread_detach(thread);
-                    // 处理请求
-//                    handleRequest(clientSocket,param.get("callback"));
+                    //1.C语言pthread库方式
+//                    pthread_t thread;
+//                    handleStruct *arg = new handleStruct;
+//                    arg->clientSocket = clientSocket;
+//                    arg->callback = server.getCallback("request");
+//                    if (pthread_create(&thread, NULL, handleRequest, (void *) arg) != 0) {
+//                        std::cerr << "Error: Failed to create thread" << std::endl;
+//                        delete arg;
+//                        continue;
+//                    }
+//                    // 分离线程，使其在完成处理后能自动释放资源
+//                    pthread_detach(thread);
+                    //2.c++线程lambda方式
+//                    Php::Value callback = server.getCallback("request");
+//                    std::thread handleThread([clientSocket, &callback] {
+//                        char buffer[1024];
+//                        memset(buffer, 0, sizeof(buffer));
+//                        std::string response = "HTTP/1.1 200 OK\r\n"
+//                                               "Content-Type: text/html\r\n"
+//                                               "\r\n";
+//                        Php::Value res = callback();
+//                        response += res.stringValue();
+//                        send(clientSocket, response.c_str(), response.size(), 0);
+//                        std::cout << "send message~~" << std::endl;
+//                        close(clientSocket);
+//                    });
+//                    handleThread.detach();
+                    //3.c++和std::bind的方式
+                    Php::Value callback = server.getCallback("request");
+                    auto handleRequest =  std::bind(handleRequestForCpp,clientSocket,callback);
+                    std::thread handleThread(handleRequest);
+                    handleThread.detach();
+
                 }
             }
         }
@@ -170,6 +203,10 @@ PHPCPP_EXPORT void *get_module() {
     webServer.method<&WebServer::__construct>("__construct", Php::Public, {
             Php::ByVal("address", Php::Type::String, true),
             Php::ByVal("port", Php::Type::Numeric, true),
+    });
+
+    webServer.method<&WebServer::set>("set", Php::Public, {
+            Php::ByVal("setting", Php::Type::Array, true),
     });
     //注册导出类的可访问普通函数
     webServer.method<&WebServer::start>("start", Php::Public, {
